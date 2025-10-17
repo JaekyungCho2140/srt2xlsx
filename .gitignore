@@ -52,13 +52,7 @@ testfiles/
 # Build
 *.spec.bak
 
-# Claude
-.claude/
-CLAUDE.md
-
 # MD Files
 USAGE.md
 README.md
 
-# TXT files
-requirements-dev.txt

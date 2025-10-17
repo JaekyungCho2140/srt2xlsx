@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__serena__list_dir",
+      "mcp__serena__activate_project",
+      "Bash(dir:*)",
+      "Bash(powershell:*)",
+      "Bash(del:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "WebSearch",
+      "Bash(ls:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
