@@ -1,0 +1,12 @@
+# GUI
+customtkinter==5.2.2
+
+# Excel
+openpyxl==3.1.5
+
+# 유틸리티
+psutil==5.9.8
+chardet==5.2.0
+
+# 패키징
+PyInstaller==6.3.0
