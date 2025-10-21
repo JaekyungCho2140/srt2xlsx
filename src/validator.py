@@ -15,7 +15,9 @@ from src.errors import (
     InvalidFilenameError,
     TimestampSyncError,
     SubtitleCountMismatchError,
-    InsufficientMemoryError
+    InsufficientMemoryError,
+    DetailedValidationError,
+    ValidationResult
 )
 
 
@@ -134,6 +136,104 @@ class Validator:
             for lang_code, (start, end) in timestamps.items():
                 if (start, end) != reference_timestamps:
                     raise TimestampSyncError(i + 1)
+
+    @staticmethod
+    def validate_timestamp_sync_with_details(subtitles_by_language: Dict[str, List[Subtitle]]) -> ValidationResult:
+        """
+        파일 간 타임스탬프 동기화 검증 (오류 수집 방식)
+
+        Args:
+            subtitles_by_language: 파일 경로별 자막 리스트
+                예: {"/path/to/subtitle_KO.srt": [Subtitle, ...], ...}
+
+        Returns:
+            ValidationResult: 검증 결과
+        """
+        errors = []
+
+        if not subtitles_by_language:
+            return ValidationResult(success=True, errors=[], warnings=[], files_checked=[])
+
+        # 자막 개수 확인
+        file_counts = {filepath: len(subs) for filepath, subs in subtitles_by_language.items()}
+        counts = list(file_counts.values())
+
+        if len(set(counts)) > 1:
+            errors.append(SubtitleCountMismatchError(file_counts=file_counts))
+
+        # 타임스탬프 동기화 확인
+        subtitle_count = min(counts)  # 최소 개수만큼만 검사
+
+        for i in range(subtitle_count):
+            # 모든 언어의 i번째 자막 타임스탬프 수집
+            timestamps = {}
+            for filepath, subtitles in subtitles_by_language.items():
+                subtitle = subtitles[i]
+                timestamps[filepath] = (subtitle.start_time, subtitle.end_time)
+
+            # 타임스탬프 일치 확인
+            first_file = list(timestamps.keys())[0]
+            reference_timestamps = timestamps[first_file]
+
+            mismatched_files = {}
+            for filepath, (start, end) in timestamps.items():
+                if (start, end) != reference_timestamps:
+                    filename = os.path.basename(filepath)
+                    mismatched_files[filename] = (start, end)
+
+            if mismatched_files:
+                # 기준 파일도 추가
+                ref_filename = os.path.basename(first_file)
+                all_timestamps = {ref_filename: reference_timestamps}
+                all_timestamps.update(mismatched_files)
+
+                errors.append(TimestampSyncError(
+                    subtitle_index=i + 1,
+                    file_timestamps=all_timestamps
+                ))
+
+        success = len(errors) == 0
+        return ValidationResult(
+            success=success,
+            errors=errors,
+            warnings=[],
+            files_checked=list(subtitles_by_language.keys())
+        )
+
+    @staticmethod
+    def validate_subtitle_counts_with_details(subtitles_by_language: Dict[str, List[Subtitle]]) -> ValidationResult:
+        """
+        파일 간 자막 개수 검증 (오류 수집 방식)
+
+        Args:
+            subtitles_by_language: 파일 경로별 자막 리스트
+
+        Returns:
+            ValidationResult: 검증 결과
+        """
+        errors = []
+
+        if not subtitles_by_language:
+            return ValidationResult(success=True, errors=[], warnings=[], files_checked=[])
+
+        # 자막 개수 확인
+        file_counts = {}
+        for filepath, subs in subtitles_by_language.items():
+            filename = os.path.basename(filepath)
+            file_counts[filename] = len(subs)
+
+        counts = list(file_counts.values())
+
+        if len(set(counts)) > 1:
+            errors.append(SubtitleCountMismatchError(file_counts=file_counts))
+
+        success = len(errors) == 0
+        return ValidationResult(
+            success=success,
+            errors=errors,
+            warnings=[],
+            files_checked=list(subtitles_by_language.keys())
+        )
 
     @staticmethod
     def check_memory_availability(

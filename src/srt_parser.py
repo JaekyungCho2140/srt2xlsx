@@ -13,7 +13,9 @@ from src.errors import (
     SubtitleDuplicateError,
     SubtitleZeroStartError,
     TimestampFormatError,
-    TimeRangeError
+    TimeRangeError,
+    DetailedValidationError,
+    ValidationResult
 )
 
 
@@ -106,6 +108,58 @@ class SRTParser:
 
         # 파싱
         return SRTParser.parse_content(content)
+
+    @staticmethod
+    def parse_file_with_validation(filepath: str) -> ValidationResult:
+        """
+        SRT 파일을 파싱하고 검증 결과 반환 (오류 수집 방식)
+
+        Args:
+            filepath: SRT 파일 경로
+
+        Returns:
+            ValidationResult: 파싱 및 검증 결과
+        """
+        errors = []
+        subtitles = []
+
+        try:
+            # 인코딩 감지
+            encoding = SRTParser.detect_encoding(filepath)
+
+            # 파일 읽기
+            with open(filepath, 'r', encoding=encoding) as f:
+                content = f.read()
+
+            # 내용 파싱 (오류 수집 방식)
+            result = SRTParser.parse_content_with_validation(content, filepath)
+            return result
+
+        except EncodingDetectionError as e:
+            # 인코딩 오류는 치명적이므로 즉시 반환
+            error = DetailedValidationError(
+                message=str(e),
+                file_path=filepath,
+                error_code=202
+            )
+            return ValidationResult(
+                success=False,
+                errors=[error],
+                warnings=[],
+                files_checked=[filepath]
+            )
+        except Exception as e:
+            # 기타 예외 처리
+            error = DetailedValidationError(
+                message=str(e),
+                file_path=filepath
+            )
+            return ValidationResult(
+                success=False,
+                errors=[error],
+                warnings=[],
+                files_checked=[filepath]
+            )
 
     @staticmethod
     def parse_content(content: str) -> List[Subtitle]:
@@ -202,6 +256,189 @@ class SRTParser:
             expected_number += 1
 
         return subtitles
+
+    @staticmethod
+    def parse_content_with_validation(content: str, filepath: str = None) -> ValidationResult:
+        """
+        SRT 내용 파싱 (오류 수집 방식)
+
+        Args:
+            content: SRT 파일 내용
+            filepath: 파일 경로 (오류 메시지용, 선택)
+
+        Returns:
+            ValidationResult: 파싱 결과 및 수집된 오류
+        """
+        subtitles = []
+        errors = []
+        lines = content.strip().split('\n')
+        i = 0
+        expected_number = 1
+        seen_numbers = {}  # {번호: 라인 번호}
+        line_number_base = 1  # 실제 파일의 라인 번호 추적
+
+        while i < len(lines):
+            # 빈 줄 건너뛰기
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+                line_number_base += 1
+
+            if i >= len(lines):
+                break
+
+            current_line_number = line_number_base
+
+            # 자막 번호 파싱
+            try:
+                number = int(lines[i].strip())
+            except ValueError:
+                errors.append(DetailedValidationError(
+                    message=f"자막 번호를 찾을 수 없습니다: {lines[i]}",
+                    file_path=filepath,
+                    line_number=current_line_number,
+                    error_code=102
+                ))
+                i += 1
+                line_number_base += 1
+                continue
+
+            # 자막 번호 검증
+            if number == 0:
+                errors.append(DetailedValidationError(
+                    message="자막 번호는 1부터 시작해야 합니다",
+                    file_path=filepath,
+                    subtitle_index=0,
+                    line_number=current_line_number,
+                    error_code=105
+                ))
+
+            # 중복 검사
+            if number in seen_numbers:
+                errors.append(SubtitleDuplicateError(
+                    duplicate_number=number,
+                    line_numbers=[seen_numbers[number], current_line_number],
+                    file_path=filepath
+                ))
+
+            # 순차 검사
+            if number != expected_number and number != 0:
+                errors.append(SubtitleSequenceError(
+                    expected=expected_number,
+                    found=number,
+                    file_path=filepath,
+                    subtitle_index=expected_number
+                ))
+
+            seen_numbers[number] = current_line_number
+            i += 1
+            line_number_base += 1
+
+            # 타임스탬프 파싱
+            if i >= len(lines):
+                errors.append(DetailedValidationError(
+                    message="타임스탬프를 찾을 수 없습니다",
+                    file_path=filepath,
+                    subtitle_index=number,
+                    line_number=line_number_base,
+                    error_code=102
+                ))
+                break
+
+            timestamp_line = lines[i].strip()
+            timestamp_line_number = line_number_base
+            match = SRTParser.TIMESTAMP_PATTERN.match(timestamp_line)
+
+            if not match:
+                errors.append(TimestampFormatError(
+                    invalid_timestamp=timestamp_line,
+                    file_path=filepath,
+                    subtitle_index=number,
+                    line_number=timestamp_line_number
+                ))
+                i += 1
+                line_number_base += 1
+                # 타임스탬프 오류지만 계속 진행
+                continue
+
+            # 타임스탬프 추출
+            start_h, start_m, start_s, start_ms = match.groups()[:4]
+            end_h, end_m, end_s, end_ms = match.groups()[4:]
+
+            # 초/분 범위 검증 (60 미만)
+            if int(start_s) >= 60 or int(end_s) >= 60:
+                invalid_ts = f"{start_h}:{start_m}:{start_s},{start_ms}" if int(start_s) >= 60 else f"{end_h}:{end_m}:{end_s},{end_ms}"
+                errors.append(TimestampFormatError(
+                    invalid_timestamp=invalid_ts,
+                    file_path=filepath,
+                    subtitle_index=number,
+                    line_number=timestamp_line_number
+                ))
+
+            if int(start_m) >= 60 or int(end_m) >= 60:
+                invalid_ts = f"{start_h}:{start_m}:{start_s},{start_ms}" if int(start_m) >= 60 else f"{end_h}:{end_m}:{end_s},{end_ms}"
+                errors.append(TimestampFormatError(
+                    invalid_timestamp=invalid_ts,
+                    file_path=filepath,
+                    subtitle_index=number,
+                    line_number=timestamp_line_number
+                ))
+
+            start_time = f"{start_h}:{start_m}:{start_s},{start_ms}"
+            end_time = f"{end_h}:{end_m}:{end_s},{end_ms}"
+
+            # 시간 범위 검증
+            start_total_ms = (int(start_h) * 3600 + int(start_m) * 60 + int(start_s)) * 1000 + int(start_ms)
+            end_total_ms = (int(end_h) * 3600 + int(end_m) * 60 + int(end_s)) * 1000 + int(end_ms)
+
+            if end_total_ms <= start_total_ms:
+                errors.append(DetailedValidationError(
+                    message=f"종료 시간이 시작 시간보다 빠릅니다",
+                    file_path=filepath,
+                    subtitle_index=number,
+                    error_code=107
+                ))
+
+            # 24시간 이내 검증
+            if start_total_ms >= 24 * 3600 * 1000 or end_total_ms >= 24 * 3600 * 1000:
+                errors.append(DetailedValidationError(
+                    message=f"타임스탬프가 24시간을 초과합니다",
+                    file_path=filepath,
+                    subtitle_index=number,
+                    error_code=102
+                ))
+
+            i += 1
+            line_number_base += 1
+
+            # 자막 텍스트 파싱
+            text_lines = []
+            while i < len(lines) and lines[i].strip():
+                text_lines.append(lines[i])
+                i += 1
+                line_number_base += 1
+
+            # 자막 텍스트 (빈 텍스트 허용)
+            text = '\n'.join(text_lines)
+
+            # Subtitle 객체 생성
+            subtitle = Subtitle(
+                number=number,
+                start_time=start_time,
+                end_time=end_time,
+                text=text
+            )
+            subtitles.append(subtitle)
+
+            expected_number += 1
+
+        # 결과 반환
+        success = len(errors) == 0
+        return ValidationResult(
+            success=success,
+            errors=errors,
+            warnings=[],
+            files_checked=[filepath] if filepath else []
+        )
 
     @staticmethod
     def parse_timestamp_to_ms(timestamp: str) -> int:

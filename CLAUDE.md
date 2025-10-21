@@ -23,6 +23,34 @@ All implementation details must strictly follow the PRD.md specifications. If an
 For all technical specifications, constraints, and implementation details, refer to:
 - **📋 PRD v1.6.5**: `.claude/docs/Completed/PRD.md` (archived reference)
 
+## Development Workflow
+
+### Test-First Development
+- Write tests before implementing features
+- All non-GUI logic must have automated tests
+- GUI components require manual testing as specified in Testing Strategy
+- Tests must validate both happy paths and edge cases
+
+### Verification Requirements
+- After any code modification, pytest results must be provided
+- Never report "Modified successfully" or "Fixed" without showing verification
+- Execute code at each step to validate changes
+- Show actual test output, not assumptions about test results
+
+### Prohibited Practices
+- Implementing features without tests
+- Reporting "Tests passed" without showing pytest execution results
+- Speculative responses like "This should work" or "Probably correct"
+- Committing code that fails tests
+- Skipping validation steps to save time
+
+### Documentation Requirements
+- Add docstrings to all functions and classes (follow PEP 257)
+- Include type hints for all function parameters and return values
+- Handle edge cases explicitly (file not found, invalid format, encoding errors, etc.)
+- Provide clear, actionable error messages to users
+- Document why decisions were made, not just what was done
+
 ## Common Commands
 
 ### Development Setup
@@ -69,68 +97,82 @@ pyinstaller build.spec
 
 ## Architecture Overview
 
-### Module Structure
-```
-src/
-├── config.py          # Settings.ini management (window position, last mode, last directory)
-├── errors.py          # Custom exception hierarchy (100/200/300 error codes)
-├── srt_parser.py      # SRT parsing with encoding detection (UTF-8 → CP949 → chardet)
-├── excel_generator.py # Excel creation/reading with openpyxl (formatting, headers)
-├── validator.py       # All validation logic (timestamps, language codes, memory checks)
-└── converter.py       # Main conversion orchestration (Two-Phase Commit for XLSX→SRT)
-```
+### Code Structure Reference
+
+For current code structure, use **Serena MCP**:
+- **Directory structure**: `list_dir('src', recursive=False)`
+- **Module symbols**: `get_symbols_overview('<module_path>')`
+- **Error hierarchy**: `find_symbol('ConverterError', 'src/errors.py', depth=2)`
+- **Class methods**: `find_symbol('<ClassName>', '<file_path>', depth=1)`
+
+Detailed module information is maintained in project memory: `read_memory('project_overview')`
 
 ### Key Architectural Patterns
 
 **Two-Phase Commit (XLSX → SRT)**
-- Phase 1: Create all temporary files (*.tmp.YYYYMMDDHHMMSS)
-- Phase 2: Atomic rename all files to final names
-- On error: Complete rollback of all temporary and partially created files
+- **Purpose**: Guarantee atomic multi-file creation
+- **Phase 1**: Create all temporary files (*.tmp.YYYYMMDDHHMMSS)
+- **Phase 2**: Atomic rename all files to final names
+- **On error**: Complete rollback of all temporary and partially created files
+- **Why**: Prevents partial file sets that would break conversion reversibility
 
 **Encoding Detection Strategy**
-1. UTF-8 BOM check (immediate success)
-2. UTF-8 decode attempt
-3. CP949 decode attempt
-4. chardet auto-detection (confidence ≥ 0.7)
-5. Error 202 if all fail
+- **Purpose**: Handle diverse subtitle file encodings
+- **Chain**: UTF-8 BOM → UTF-8 decode → CP949 decode → chardet (≥ 0.7) → Error 202
+- **Why this order**: BOM is instant, UTF-8 most common, CP949 for Korean legacy, chardet as fallback
+- **Implementation**: See `SRTParser.detect_encoding()`
 
 **Memory Management**
-- Pre-flight memory check using psutil
-- SRT→XLSX: filesize × 5 multiplier
-- XLSX→SRT: filesize × 3 multiplier
-- Warning threshold: required > (available × 0.7)
+- **Purpose**: Prevent OOM crashes on large files
+- **Pre-flight check**: Estimate required memory before conversion
+- **Multipliers**: SRT→XLSX: filesize × 5, XLSX→SRT: filesize × 3
+- **Warning threshold**: Required > (available × 0.7)
+- **Why**: Excel/openpyxl has significant memory overhead
+- **Implementation**: See `Validator.check_memory_availability()`
 
 **Timestamp Synchronization**
-- All language files must have identical subtitle counts
-- Each subtitle number must have exact timestamp match across all languages
-- Millisecond-level precision required
-- Error 103 on any mismatch
+- **Purpose**: Ensure all language tracks remain in perfect sync
+- **Requirements**: Identical subtitle counts, exact timestamp matches across all languages
+- **Precision**: Millisecond-level validation
+- **Why**: Single-frame desyncs break video playback
+- **Implementation**: See `Validator.validate_timestamp_sync()`
 
-### Error Code System
-- **100s**: Validation errors (sequence, timestamp format, sync)
-- **200s**: File I/O errors (encoding, lock, language code)
-- **300s**: System errors (multi-instance, memory, disk space)
+### UI Architecture Decisions
 
-### UI Coordination
-- CustomTkinter for all UI components (no tkinter widgets)
-- Fixed window size: 300×250 pixels
-- Component placement: absolute coordinates using `place(anchor='nw')`
-- CTkSwitch for mode toggle with dynamic text updates
-- Settings persistence via settings.ini (ConfigParser)
+- **CustomTkinter choice**: Native toggle switch (CTkSwitch), modern UI components, no mixed widget styles
+- **Fixed window size**: Simplified layout management, no responsive design complexity, predictable UX
+- **Settings persistence**: User preferences (mode, position, directory) saved in settings.ini for session continuity
+- **Why no resizing**: 300×250 pixels sufficient for all content, avoids layout complexity
 
-### Critical Validation Rules
-1. **Language Code Extraction**: Regex pattern `.*_(LANG-CODE)\.srt$` (case-insensitive)
-2. **Subtitle Numbering**: Must start at 1, sequential with no gaps
-3. **Timestamp Format**: Strict `HH:MM:SS,mmm` validation
-4. **Same Directory Rule**: All SRT files must be in same folder for SRT→XLSX
-5. **Empty Column Detection**: Strip whitespace, check for None/""/whitespace-only
+For specific coordinates and component details, see `SubtitleConverterApp` in `main.py`.
 
-### File Operations
-- All writes use temporary files with timestamp suffix
-- Temporary file cleanup on app start in output directory
-- Lock file (srt2xlsx.lock) prevents multiple instances
-- Stale lock auto-removal after 24 hours
-- All-or-Nothing rollback on any error
+### Critical Business Rules
+
+1. **Language Code Format**: Files must follow `*_(LANG-CODE).srt` naming convention
+   - Supported languages: KO, EN, CT, CS, JA, TH, ES-LATAM, PT-BR, RU
+   - Implementation: See `Validator.LANGUAGE_PATTERN` and `extract_language_code()`
+
+2. **Subtitle Requirements**:
+   - Numbers must start at 1, sequential with no gaps
+   - Timestamp format: `HH:MM:SS,mmm` (millisecond precision required)
+   - All language files must have identical timestamps for proper synchronization
+
+3. **File Organization**:
+   - All SRT files must be in the same directory for SRT→XLSX conversion
+   - Empty columns/cells detected via whitespace stripping
+   - Why: Simplifies file selection, prevents path complexity
+
+For validation implementation details, see `src/validator.py`.
+
+### File Safety Patterns
+
+- **Temporary file strategy**: All writes use temporary files to prevent corruption during failures
+- **Single instance lock**: Lock file (srt2xlsx.lock) prevents multiple instances from conflicting writes
+- **Automatic cleanup**: Stale temporary files and locks removed on startup
+- **Atomic operations**: All-or-Nothing rollback on errors (Two-Phase Commit for multi-file operations)
+- **Why**: Data integrity is prioritized over performance
+
+For specific timeout values and file naming patterns, see `converter.py` and `main.py`.
 
 ## Development Notes
 

@@ -9,9 +9,12 @@ from pathlib import Path
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
 from src.config import Config
-from src.errors import MultipleInstanceError, ConverterError
+from src.errors import MultipleInstanceError, ConverterError, ValidationResult
 from src.converter import Converter
+from src.validator import Validator
+from src.ui import ErrorDetailWindow
 import time
+from datetime import datetime
 
 
 class SubtitleConverterApp:
@@ -256,6 +259,52 @@ class SubtitleConverterApp:
     def _convert_srt_to_xlsx(self) -> None:
         """SRT → XLSX 변환"""
         try:
+            # ========================================
+            # 1단계: 먼저 모든 파일 검증 (상세 오류 수집)
+            # ========================================
+            from src.srt_parser import SRTParser
+            
+            all_errors = []
+            subtitles_by_filepath = {}
+            
+            for filepath in self.selected_files:
+                # 각 파일을 검증하며 파싱
+                result = SRTParser.parse_file_with_validation(filepath)
+                
+                if not result.success:
+                    # 오류 발견 - 수집
+                    all_errors.extend(result.errors)
+                else:
+                    # 성공 - 나중에 변환을 위해 저장
+                    # 다시 파싱 (기존 메서드 사용)
+                    subtitles = SRTParser.parse_file(filepath)
+                    subtitles_by_filepath[filepath] = subtitles
+            
+            # 파일 간 검증 (타임스탬프 동기화, 자막 개수)
+            if len(subtitles_by_filepath) > 1:
+                sync_result = Validator.validate_timestamp_sync_with_details(subtitles_by_filepath)
+                if not sync_result.success:
+                    all_errors.extend(sync_result.errors)
+            
+            # 오류가 있으면 상세 오류 창 표시
+            if all_errors:
+                error_result = ValidationResult(
+                    success=False,
+                    errors=all_errors,
+                    warnings=[],
+                    files_checked=self.selected_files
+                )
+                
+                # 로그 파일 저장
+                self._save_error_log(error_result)
+                
+                # 오류 창 표시
+                ErrorDetailWindow(self.root, error_result)
+                return  # 변환 중단
+            
+            # ========================================
+            # 2단계: 검증 통과 - 변환 실행
+            # ========================================
             output_path = Converter.srt_to_xlsx(self.selected_files)
             messagebox.showinfo("변환 완료", f"Excel 파일이 생성되었습니다:\n{os.path.basename(output_path)}")
 
@@ -287,6 +336,36 @@ class SubtitleConverterApp:
             messagebox.showerror("오류", str(e))
         except Exception as e:
             messagebox.showerror("오류", f"변환 중 오류가 발생했습니다:\n{str(e)}")
+
+
+    def _save_error_log(self, result: ValidationResult) -> None:
+        """
+        오류 로그를 파일로 저장
+
+        Args:
+            result: 검증 결과
+        """
+        try:
+            # 로그 파일명 생성 (타임스탬프 포함)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_filename = f"validation_errors_{timestamp}.log"
+
+            # 실행 파일과 같은 디렉토리에 저장
+            if getattr(sys, 'frozen', False):
+                # PyInstaller로 패키징된 경우
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                # 개발 환경
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+
+            log_path = os.path.join(base_dir, log_filename)
+
+            # 로그 저장
+            result.save_to_log_file(log_path)
+
+        except Exception:
+            # 로그 저장 실패는 무시 (주 기능에 영향 없도록)
+            pass
 
     def _on_closing(self) -> None:
         """프로그램 종료 시"""
