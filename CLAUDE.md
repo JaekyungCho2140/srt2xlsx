@@ -7,8 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Documentation Structure
 - **CLAUDE.md** (this file): High-level guidance and quick reference for Claude
-- **PRD.md** (.claude/docs/PRD.md): Complete product requirements, specifications, and technical details - **PRIMARY REFERENCE**
-- **design_draft.html** (.claude/docs/design_draft.html): UI design mockup
+- **PRD.md** (.claude/docs/Completed/PRD.md): Complete product requirements, specifications, and technical details - **PRIMARY REFERENCE** (archived)
 
 ## Core Development Principles
 
@@ -22,7 +21,7 @@ All implementation details must strictly follow the PRD.md specifications. If an
 
 ### 3. PRD.md is the Source of Truth
 For all technical specifications, constraints, and implementation details, refer to:
-- **📋 PRD v1.6.5**: `.claude/docs/PRD.md`
+- **📋 PRD v1.6.5**: `.claude/docs/Completed/PRD.md` (archived reference)
 
 ## Common Commands
 
